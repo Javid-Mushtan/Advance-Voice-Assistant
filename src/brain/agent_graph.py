@@ -1,6 +1,5 @@
-from typing import TypedDict, Annotated
+from typing import TypedDict, Annotated, Any
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -12,18 +11,19 @@ from src.tools.api_tools import get_weather
 from src.tools.personal_tools import send_email, add_note
 from src.utils.config import OPENROUTER_API_KEY
 
+# ------------------------------------------------------------------
+# 1. Agent State
+# ------------------------------------------------------------------
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], "Conversation history"]
     session_id: str
     long_term_memory: LongTermMemory
 
-# --- Wrapper tools that accept the memory object ---
-# We'll define functions that extract memory from state via tool args.
-# In LangGraph we can inject state via partial tool binding.
-
-@tool
-def rag_search(query: str, session_id: str) -> str:
-    """Search your personal knowledge base (documents) using conversation history."""
+# ------------------------------------------------------------------
+# 2. Actual implementations (take extra dependencies)
+# ------------------------------------------------------------------
+def _rag_search_impl(query: str, session_id: str) -> str:
+    """Call the history‑aware RAG pipeline."""
     try:
         result = conversational_rag_chain.invoke(
             {"input": query},
@@ -33,18 +33,34 @@ def rag_search(query: str, session_id: str) -> str:
     except Exception as e:
         return f"RAG error: {str(e)}"
 
-@tool
-def remember_fact(fact: str, memory_obj: LongTermMemory) -> str:
-    """Store a fact about the user in long-term memory."""
-    memory_obj.remember(fact)
+def _remember_fact_impl(fact: str, memory: LongTermMemory) -> str:
+    memory.remember(fact)
     return "Fact remembered."
 
-@tool
-def recall_memory(query: str, memory_obj: LongTermMemory) -> str:
-    """Retrieve facts about the user from long-term memory."""
-    return memory_obj.recall(query)
+def _recall_memory_impl(query: str, memory: LongTermMemory) -> str:
+    return memory.recall(query)
 
-all_tools = [
+# ------------------------------------------------------------------
+# 3. Tool wrappers for the LLM – ONLY contain JSON‑safe parameters
+#    These are what the LLM will “see” and call.
+# ------------------------------------------------------------------
+@tool
+def rag_search(query: str) -> str:
+    """Search your personal knowledge base (documents). Use this when the user asks about stored documents."""
+    # The real work is done by the tool executor, not here.
+    return "This placeholder should never be called."
+
+@tool
+def remember_fact(fact: str) -> str:
+    """Store a fact about the user in long‑term memory."""
+    return "Placeholder"
+
+@tool
+def recall_memory(query: str) -> str:
+    """Retrieve facts about the user from long‑term memory."""
+    return "Placeholder"
+
+bindable_tools = [
     rag_search,
     remember_fact,
     recall_memory,
@@ -56,8 +72,25 @@ all_tools = [
     add_note,
 ]
 
-llm = ChatOpenAI(model="openrouter/free",base_url="https://openrouter.ai/api/v1", temperature=0, api_key=OPENROUTER_API_KEY)
-llm_with_tools = llm.bind_tools(all_tools)
+
+TOOL_IMPL_MAP = {
+    "rag_search": lambda args, state: _rag_search_impl(
+        query=args["query"], session_id=state["session_id"]
+    ),
+    "remember_fact": lambda args, state: _remember_fact_impl(
+        fact=args["fact"], memory=state["long_term_memory"]
+    ),
+    "recall_memory": lambda args, state: _recall_memory_impl(
+        query=args["query"], memory=state["long_term_memory"]
+    ),
+}
+
+llm = ChatOpenAI(model="openrouter/free", temperature=0, api_key=OPENROUTER_API_KEY,base_url="https://openrouter.ai/api/v1")
+llm_with_tools = llm.bind_tools(bindable_tools)
+
+def agent_node(state: AgentState):
+    response = llm_with_tools.invoke(state["messages"])
+    return {"messages": [response]}
 
 
 def tool_executor(state: AgentState):
@@ -71,23 +104,23 @@ def tool_executor(state: AgentState):
         tool_name = tc["name"]
         args = tc["args"]
         try:
-            if tool_name == "rag_search":
-                result = rag_search.invoke({"query": args["query"], "session_id": state["session_id"]})
-            elif tool_name in ["remember_fact", "recall_memory"]:
-                result = globals()[tool_name].invoke({**args, "memory_obj": state["long_term_memory"]})
+            # If we have a special implementation that needs state, use it
+            if tool_name in TOOL_IMPL_MAP:
+                result = TOOL_IMPL_MAP[tool_name](args, state)
             else:
-                tool_func = {t.name: t for t in all_tools}[tool_name]
-                result = tool_func.invoke(args)
+                # Generic tool – just call its .invoke() method
+                tool_obj = {t.name: t for t in bindable_tools}[tool_name]
+                result = tool_obj.invoke(args)
             results.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
         except Exception as e:
             results.append(ToolMessage(content=f"Tool error: {str(e)}", tool_call_id=tc["id"]))
     return {"messages": results}
 
-def agent_node(state: AgentState):
-    response = tool_executor(state)
-    return {"messages": [response]}
-
+# ------------------------------------------------------------------
+# 9. Build the graph
+# ------------------------------------------------------------------
 workflow = StateGraph(AgentState)
+
 workflow.add_node("agent", agent_node)
 workflow.add_node("tools", tool_executor)
 
@@ -97,7 +130,6 @@ workflow.add_conditional_edges(
     lambda state: "tools" if state["messages"][-1].tool_calls else END,
     {"tools": "tools", END: END}
 )
-
 workflow.add_edge("tools", "agent")
 
 agent_graph = workflow.compile()

@@ -1,0 +1,6 @@
+JARVIS Voice Assistant is an AI system that can:
+- Open applications
+- Answer questions
+- Store memory using FAISS
+- Send emails
+- Perform automation tasks
