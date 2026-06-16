@@ -11,17 +11,12 @@ from src.tools.api_tools import get_weather
 from src.tools.personal_tools import send_email, add_note
 from src.utils.config import OPENROUTER_API_KEY
 
-# ------------------------------------------------------------------
-# 1. Agent State
-# ------------------------------------------------------------------
+
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], "Conversation history"]
     session_id: str
     long_term_memory: LongTermMemory
 
-# ------------------------------------------------------------------
-# 2. Actual implementations (take extra dependencies)
-# ------------------------------------------------------------------
 def _rag_search_impl(query: str, session_id: str) -> str:
     """Call the history‑aware RAG pipeline."""
     try:
