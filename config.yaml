@@ -1,0 +1,8 @@
+agent:
+  model: gpt-4
+  temperature: 0.2
+voice:
+  rate: 180
+  voice: 1
+memory:
+  k_recall: 3
