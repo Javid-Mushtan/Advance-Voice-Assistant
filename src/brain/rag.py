@@ -64,7 +64,7 @@ def get_session_history(session_id: str):
         store[session_id] = ChatMessageHistory()
     return store[session_id]
 
-conventional_rag_chain = RunnableWithMessageHistory(
+conversational_rag_chain = RunnableWithMessageHistory(
     rag_chain,
     get_session_history,
     input_messages_key="input",
