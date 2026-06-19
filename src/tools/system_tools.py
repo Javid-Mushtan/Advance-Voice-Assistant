@@ -2,13 +2,43 @@ import os
 import subprocess
 from langchain_core.tools import tool
 
+WINDOWS_APP_MAP = {
+    "notepad": "notepad",
+    "calculator": "calc",
+    "calc": "calc",
+    "paint": "mspaint",
+    "chrome": "chrome",
+    "google chrome": "chrome",
+    "edge": "msedge",
+    "microsoft edge": "msedge",
+    "firefox": "firefox",
+    "word": "winword",
+    "microsoft word": "winword",
+    "excel": "excel",
+    "microsoft excel": "excel",
+    "powerpoint": "powerpnt",
+    "spotify": "spotify",
+    "vscode": "code",
+    "vs code": "code",
+    "visual studio code": "code",
+    "explorer": "explorer",
+    "file explorer": "explorer",
+    "cmd": "cmd",
+    "command prompt": "cmd",
+    "terminal": "wt",
+    "settings": "ms-settings:",
+    "whatsapp": "whatsapp",
+}
 
 @tool
 def open_app(app_name: str) -> str:
-    """Open an application by name."""
+    """Open an application on the laptop by name (e.g. 'chrome', 'notepad', 'spotify', 'vscode')."""
     try:
         if os.name == 'nt':
-            os.system(f"start {app_name}")
+            command = WINDOWS_APP_MAP.get(app_name.strip().lower(), app_name.strip())
+            # The empty "" after start is the window-title slot, required so that
+            # commands/paths containing spaces don't get misread by cmd's "start".
+            os.system(f'start "" {command}')
         else:
             subprocess.Popen(["open", "-a", app_name])
         return f"Opened {app_name}"
