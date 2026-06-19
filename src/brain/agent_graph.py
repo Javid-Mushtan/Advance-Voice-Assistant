@@ -6,7 +6,7 @@ from langchain_core.tools import tool
 
 from src.brain.memory import LongTermMemory
 from src.brain.rag import conversational_rag_chain
-from src.tools.system_tools import open_app, get_volume, shutdown_pc
+from src.tools.system_tools import open_app, get_volume, shutdown_pc, open_website
 from src.tools.api_tools import get_weather
 from src.tools.personal_tools import send_email, add_note
 from src.utils.config import OPENROUTER_API_KEY
@@ -35,10 +35,6 @@ def _remember_fact_impl(fact: str, memory: LongTermMemory) -> str:
 def _recall_memory_impl(query: str, memory: LongTermMemory) -> str:
     return memory.recall(query)
 
-# ------------------------------------------------------------------
-# 3. Tool wrappers for the LLM – ONLY contain JSON‑safe parameters
-#    These are what the LLM will “see” and call.
-# ------------------------------------------------------------------
 @tool
 def rag_search(query: str) -> str:
     """Search your personal knowledge base (documents). Use this when the user asks about stored documents."""
@@ -63,6 +59,7 @@ bindable_tools = [
     get_weather,
     get_volume,
     shutdown_pc,
+    open_website,
     send_email,
     add_note,
 ]
@@ -111,9 +108,6 @@ def tool_executor(state: AgentState):
             results.append(ToolMessage(content=f"Tool error: {str(e)}", tool_call_id=tc["id"]))
     return {"messages": results}
 
-# ------------------------------------------------------------------
-# 9. Build the graph
-# ------------------------------------------------------------------
 workflow = StateGraph(AgentState)
 
 workflow.add_node("agent", agent_node)
