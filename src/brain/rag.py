@@ -35,7 +35,7 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-llm = ChatOpenAI(api_key=OPENROUTER_API_KEY,base_url="https://openrouter.ai/api/v1",model="openrouter/free")
+llm = ChatOpenAI(api_key=OPENROUTER_API_KEY,base_url="https://openrouter.ai/api/v1",model="openai/gpt-oss-120b:free")
 
 history_aware_retriever = create_history_aware_retriever(
     llm,doc_retriever,contextualize_q_prompt

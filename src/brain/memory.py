@@ -1,6 +1,6 @@
 import os
 
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
@@ -19,7 +19,13 @@ class LongTermMemory:
             self.store = None
 
     def remember(self, fact: str):
-        doc = Document(page_content=fact,metadata={"source"})
+        fact = fact.strip()
+        if self.store is not None:
+            existing = self.store.similarity_search(fact, k=1)
+            if existing and existing[0].page_content.strip() == fact:
+                logger.info(f"Fact already stored, skipping duplicate: {fact}")
+                return
+        doc = Document(page_content=fact, metadata={"source": "user"})
         if self.store is None:
             self.store = FAISS.from_documents([doc], self.embeddings)
         else:
@@ -30,7 +36,7 @@ class LongTermMemory:
     def recall(self, query: str, k: int = 3) -> str:
         if self.store is None:
             return "No memories found."
-        docs = self.store.search(query,k)
+        docs = self.store.similarity_search(query, k=k)
         if not docs:
             return "No relevant memory."
         return "\n".join([d.page_content for d in docs])

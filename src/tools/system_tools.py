@@ -66,20 +66,13 @@ def open_app(app_name: str) -> str:
         if os.name == 'nt':
             key = app_name.strip().lower()
 
-            # Fast path for common apps we already know the launch command for.
             if key in WINDOWS_APP_MAP:
                 command = WINDOWS_APP_MAP[key]
-                # The empty "" after start is the window-title slot, required so that
-                # commands/paths containing spaces don't get misread by cmd's "start".
                 os.system(f'start "" {command}')
                 return f"Opened {app_name}"
 
-            # Otherwise, ask Windows what's actually installed (covers Store
-            # apps like WhatsApp, plus anything else not in the map above).
             app_id = _find_app_id(app_name)
             if app_id:
-                # os.startfile talks to the Windows shell directly (ShellExecute),
-                # so it doesn't depend on explorer.exe being resolvable on PATH.
                 os.startfile(f'shell:AppsFolder\\{app_id}')
                 return f"Opened {app_name}"
 
@@ -112,17 +105,72 @@ def open_website(url: str) -> str:
         except Exception as e:
             return f"Could not open {site}: {str(e)}"
 
+WINDOWS_PROCESS_MAP = {
+    "notepad": "notepad.exe",
+    "calculator": "CalculatorApp.exe",
+    "calc": "CalculatorApp.exe",
+    "paint": "mspaint.exe",
+    "chrome": "chrome.exe",
+    "google chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "microsoft edge": "msedge.exe",
+    "firefox": "firefox.exe",
+    "word": "winword.exe",
+    "microsoft word": "winword.exe",
+    "excel": "excel.exe",
+    "microsoft excel": "excel.exe",
+    "powerpoint": "powerpnt.exe",
+    "spotify": "spotify.exe",
+    "vscode": "Code.exe",
+    "vs code": "Code.exe",
+    "visual studio code": "Code.exe",
+    "explorer": "explorer.exe",
+    "file explorer": "explorer.exe",
+    "cmd": "cmd.exe",
+    "command prompt": "cmd.exe",
+    "whatsapp": "WhatsApp.exe",
+}
+
+def _find_running_process(app_name: str) -> str | None:
+    """
+    Look through currently running processes (via tasklist) for one whose
+    name contains app_name. Lets us close apps that aren't in the map above
+    without needing the exact .exe name.
+    """
+    try:
+        result = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=10)
+        name_key = app_name.strip().lower()
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if parts and name_key in parts[0].lower():
+                return parts[0]
+        return None
+    except Exception as e:
+        logger.warning(f"Process lookup failed for '{app_name}': {e}")
+        return None
+
 
 @tool
 def close_app(app_name: str) -> str:
-    """Close an application by name."""
+    """Close a running application by name (e.g. 'chrome', 'whatsapp', 'spotify')."""
     try:
         if os.name == "nt":
-            os.system(f"taskkill /f /im {app_name}.exe")
+            key = app_name.strip().lower()
+            process_name = WINDOWS_PROCESS_MAP.get(key) or _find_running_process(app_name)
+
+            if not process_name:
+                return f"'{app_name}' doesn't seem to be running right now."
+
+            result = subprocess.run(
+                ["taskkill", "/f", "/im", process_name],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                return f"Closed {app_name}"
+            return f"Could not close {app_name}: {result.stderr.strip() or result.stdout.strip()}"
         else:
             subprocess.Popen(["pkill", "-f", app_name])
-
-        return f"Closed {app_name}"
+            return f"Closed {app_name}"
 
     except Exception as e:
         return f"Could not close {app_name}: {str(e)}"
