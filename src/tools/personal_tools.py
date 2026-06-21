@@ -1,7 +1,18 @@
+import time
+
 from langchain_core.tools import tool
 from pathlib import Path
 from datetime import datetime
 
+from src.tools.system_tools import open_app
+
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = True
+except ImportError:
+    pyautogui = None
+
+import tkinter as tk
 
 @tool
 def send_email(recipient: str, subject: str, body: str) -> str:
@@ -25,7 +36,6 @@ def send_email(recipient: str, subject: str, body: str) -> str:
     if not body.strip():
         return "The email body appears to be empty. Please add some content before sending."
 
-    # TODO: Integrate with an email provider (e.g. SendGrid, Gmail API)
     return (
         f"Thank you! Your email to {recipient} with the subject '{subject}' "
         f"has been queued, but email sending hasn't been configured yet. "
@@ -65,3 +75,92 @@ def add_note(content: str) -> str:
 
     except OSError as e:
         return f"Something went wrong while saving your note: {e}. Please try again or check your storage."
+
+def get_contact_name():
+    result = {"name": None}
+
+    def submit():
+        result["name"] = entry.get().strip()
+        root.destroy()
+
+    root = tk.Tk()
+    root.title("WhatsApp Contact")
+    root.geometry("300x120")
+
+    tk.Label(root, text="Enter Contact Name:").pack(pady=10)
+
+    entry = tk.Entry(root, width=30)
+    entry.pack()
+    entry.focus_force()
+
+    entry.bind("<Return>", lambda event: submit())
+
+    tk.Button(root, text="OK", command=submit).pack(pady=10)
+
+    root.mainloop()
+
+    return result["name"]
+
+@tool
+def send_whatsapp_message(contact_name: str, message: str) -> str:
+    """
+    Send a WhatsApp message to a contact by name (e.g. 'dad', 'mom').
+    Searches for the contact inside WhatsApp itself - no phone number needed,
+    but the name should be close to how the contact is actually saved.
+    """
+    if pyautogui is None:
+        return "pyautogui isn't installed. Run: pip install pyautogui"
+    if not contact_name.strip():
+        return "I need a contact name to message."
+    if not message.strip():
+        return "I need a message to send."
+
+    contact_name = get_contact_name()
+    time.sleep(10)
+    try:
+        open_app.invoke({"app_name": "whatsapp"})
+        time.sleep(2.5)
+
+        pyautogui.hotkey('ctrl', 'f')
+        time.sleep(0.6)
+        pyautogui.typewrite(contact_name.strip(), interval=0.03)
+        time.sleep(1.0)
+        pyautogui.hotkey('down')
+        pyautogui.press('enter')
+        time.sleep(1.0)
+
+        pyautogui.typewrite(message.strip(), interval=0.02)
+        pyautogui.press('enter')
+
+        return f"Sent '{message}' to {contact_name} on WhatsApp."
+    except Exception as e:
+        return f"Could not send WhatsApp message to {contact_name}: {str(e)}"
+
+@tool
+def open_whatsapp_chat_for_call(contact_name: str) -> str:
+    """
+    Open a WhatsApp contact's chat so a video/voice call can be started
+    (e.g. user says 'video call dad'). Opens the right conversation but does
+    NOT press the call button itself - the user taps it to start the call.
+    """
+    if pyautogui is None:
+        return "pyautogui isn't installed. Run: pip install pyautogui"
+    if not contact_name.strip():
+        return "I need a contact name to open."
+
+    contact_name = get_contact_name()
+    time.sleep(10)
+    try:
+        open_app.invoke({"app_name": "whatsapp"})
+        time.sleep(2.5)
+
+        pyautogui.hotkey('ctrl', 'f')
+        time.sleep(0.6)
+        pyautogui.typewrite(contact_name.strip(), interval=0.03)
+        time.sleep(1.0)
+        pyautogui.press('down')
+        pyautogui.press('enter')
+
+        return f"Opened {contact_name}'s chat on WhatsApp - tap the video call icon to start the call."
+    except Exception as e:
+        return f"Could not open WhatsApp chat for {contact_name}: {str(e)}"
