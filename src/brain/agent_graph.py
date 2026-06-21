@@ -8,7 +8,7 @@ from langchain_core.tools import tool
 from src.brain.memory import LongTermMemory
 from src.brain.rag import conversational_rag_chain
 from src.tools.system_tools import open_app, close_app, get_volume, shutdown_pc, open_website
-from src.tools.api_tools import get_weather
+from src.tools.api_tools import get_weather, web_search
 from src.tools.personal_tools import send_email, add_note
 from src.utils.config import OPENROUTER_API_KEY
 from src.utils.logger import logger
@@ -57,6 +57,7 @@ bindable_tools = [
     remember_fact,
     recall_memory,
     open_app,
+    web_search,
     close_app,
     get_weather,
     get_volume,

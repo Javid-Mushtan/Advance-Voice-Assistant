@@ -7,14 +7,14 @@ from langchain_core.messages import HumanMessage
 def main():
     print("Initializing Jarvis...")
     memory = LongTermMemory()
-    session_id = "jarvis_user"
+    session_id = "Javid 0.5"
     state = AgentState(
         messages=[],
         session_id=session_id,
         long_term_memory=memory
     )
 
-    speak("Hello, I am Jarvis. How can I help you?")
+    speak("Hello, I am Javid Mushtan. How can I help you?")
     while True:
         try:
             user_input = listen()
@@ -26,7 +26,6 @@ def main():
 
             state["messages"].append(HumanMessage(content=user_input))
             state = agent_graph.invoke(state)
-            # The last message should be an AIMessage with the final answer
             last_msg = state["messages"][-1]
             if hasattr(last_msg, "content") and last_msg.content:
                 answer = last_msg.content
