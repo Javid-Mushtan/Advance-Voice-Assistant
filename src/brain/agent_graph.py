@@ -11,8 +11,12 @@ from src.brain.rag import conversational_rag_chain
 from src.tools.system_tools import open_app, close_app, get_volume, open_website
 from src.tools.api_tools import get_weather, web_search
 from src.tools.personal_tools import send_email, add_note, send_whatsapp_message, open_whatsapp_chat_for_call
+from src.tools.phone_tools import (
+    call_contact, call_number, end_call, resolve_contact_number,
+    get_phone_last_location, get_phone_live_location,
+    open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
+)
 
-# --- Admin tools ---
 from src.tools.admin_tools import (
     scan_files, delete_file, move_file, read_file_contents, list_directory,
     uninstall_application, install_application, list_installed_apps,
@@ -92,6 +96,9 @@ NORMAL_TOOLS = [
     open_app, close_app, get_volume, open_website,
     get_weather, web_search,
     send_email, add_note, send_whatsapp_message, open_whatsapp_chat_for_call,
+    call_contact, call_number, end_call, resolve_contact_number,
+    get_phone_last_location, get_phone_live_location,
+    open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
     unlock_admin,
 ]
 
