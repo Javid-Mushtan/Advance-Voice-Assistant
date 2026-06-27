@@ -2,7 +2,7 @@ import os
 import cv2
 from src.utils.logger import logger
 
-ADMIN_FACE_DIR = "data/admin_face"
+ADMIN_FACE_DIR = "C:/Users/MMM JAVID/Desktop/Advance_Voice_Assistant/data/admin_face"
 ADMIN_FACE_PATH = os.path.join(ADMIN_FACE_DIR, "admin.jpg")
 TEMP_FACE_PATH  = "data/WIN_20260623_02_27_10_Pro.jpg"
 
