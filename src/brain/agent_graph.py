@@ -1,5 +1,7 @@
 import time
 from typing import TypedDict, Annotated, Any, Optional
+
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_openai import ChatOpenAI
@@ -9,12 +11,22 @@ from langchain_core.tools import tool
 from src.brain.memory import LongTermMemory
 from src.brain.rag import conversational_rag_chain
 from src.tools.system_tools import open_app, close_app, get_volume, open_website
-from src.tools.api_tools import get_weather, web_search
+from src.tools.api_tools import get_weather, web_search, get_weather_current_location, get_city
 from src.tools.personal_tools import send_email, add_note, send_whatsapp_message, open_whatsapp_chat_for_call
 from src.tools.phone_tools import (
     call_contact, call_number, end_call, resolve_contact_number,
     get_phone_last_location, get_phone_live_location,
     open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
+)
+
+from src.tools.system_tools import (
+    toggle_wifi, scan_wifi_networks, connect_wifi,
+    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
+    forget_wifi_network, get_wifi_password,
+)
+
+from src.tools.location_tools import (
+    get_current_location, get_location_coordinates, get_maps_link
 )
 
 from src.tools.admin_tools import (
@@ -25,10 +37,10 @@ from src.tools.admin_tools import (
     get_disk_usage, get_system_info, shutdown_pc, cancel_shutdown,
     restart_pc, set_volume,
 )
-from src.utils.config import OPENROUTER_API_KEY
+from src.utils.config import OPENROUTER_API_KEY,HUGGING_FACE_API_TOKEN
 from src.utils.logger import logger
 
-ADMIN_SESSION_TTL = 300  # seconds — admin unlocks expire after 5 minutes
+ADMIN_SESSION_TTL = 300
 
 
 class AgentState(TypedDict):
@@ -36,7 +48,7 @@ class AgentState(TypedDict):
     session_id: str
     long_term_memory: LongTermMemory
     is_admin: bool
-    admin_granted_at: Optional[float]   # epoch time when admin was granted
+    admin_granted_at: Optional[float]
 
 
 def _rag_search_impl(query: str, session_id: str) -> str:
@@ -100,6 +112,11 @@ NORMAL_TOOLS = [
     get_phone_last_location, get_phone_live_location,
     open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
     unlock_admin,
+    get_weather_current_location, get_city,
+    get_current_location, get_location_coordinates, get_maps_link,
+toggle_wifi, scan_wifi_networks, connect_wifi,
+    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
+    forget_wifi_network, get_wifi_password
 ]
 
 ADMIN_TOOLS = [
@@ -140,12 +157,12 @@ def _handle_unlock_admin(state: AgentState) -> str:
         return f"Face verification error: {e}"
 
 
-llm = ChatOpenAI(
-    model="openrouter/free",
-    temperature=0,
-    api_key=OPENROUTER_API_KEY,
-    base_url="https://openrouter.ai/api/v1"
+endpoint = HuggingFaceEndpoint(
+    repo_id="Qwen/Qwen2.5-7B-Instruct",
+    huggingfacehub_api_token=HUGGING_FACE_API_TOKEN
 )
+
+llm = ChatHuggingFace(llm=endpoint)
 
 llm_with_normal_tools = llm.bind_tools(NORMAL_TOOLS)
 llm_with_all_tools    = llm.bind_tools(ALL_TOOLS)
