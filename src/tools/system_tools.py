@@ -3,14 +3,12 @@ import os
 import re
 import subprocess
 import sys
+import pycaw
 import time
 import webbrowser
 from langchain_core.tools import tool
 from src.utils.logger import logger
 
-# Common Windows app names -> the actual command Windows understands.
-# "start" only works for things on PATH or registered in Windows, so plain
-# words like "chrome" or "word" need to be mapped to their real launch command.
 WINDOWS_APP_MAP = {
     "notepad": "notepad",
     "calculator": "calc",
@@ -224,7 +222,7 @@ def _get_wifi_interface() -> str:
     return "Wi-Fi"
 
 @tool
-def toggle_wifi(enable):
+def toggle_wifi(enable: bool = True):
     """Turn WiFi ON or OFF."""
 
     if not is_admin():
@@ -649,3 +647,387 @@ def get_wifi_password(ssid: str) -> str:
     if "not found" in out.lower():
         return f"No saved profile found for '{ssid}'."
     return f"Could not retrieve password for '{ssid}'. Make sure the network is saved."
+
+@tool
+def set_volume(level: int) -> str:
+    """
+    Set the system volume to a percentage (0-100).
+    Example: set_volume(50) sets volume to 50%.
+    Use for: 'set volume to 70', 'volume 50 percent', 'make it louder/quieter'.
+    """
+
+    level = max(0, min(100,level))
+    try:
+        # Method 1: PowerShell (most reliable on Windows 10/11)
+        ps = f"""
+                $vol = {level} / 100
+                $obj = New-Object -ComObject WScript.Shell
+                Add-Type -TypeDefinition @'
+        using System.Runtime.InteropServices;
+        [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioEndpointVolume {{
+            int f(); int g(); int h(); int i();
+            int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext);
+            int j();
+            int GetMasterVolumeLevelScalar(out float pfLevel);
+        }}
+        [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDevice {{ int Activate(ref System.Guid id, int clsCtx, int activationParams, out IAudioEndpointVolume aev); }}
+        [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceEnumerator {{ int f(); int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint); }}
+        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorClass {{}}
+        public class Vol {{
+            public static void Set(float level) {{
+                var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorClass());
+                IMMDevice device; enumerator.GetDefaultAudioEndpoint(0, 1, out device);
+                var guid = typeof(IAudioEndpointVolume).GUID;
+                IAudioEndpointVolume vol; device.Activate(ref guid, 23, 0, out vol);
+                vol.SetMasterVolumeLevelScalar(level, System.Guid.Empty);
+            }}
+        }}
+        '@
+                [Vol]::Set($vol)
+                """
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return f"Volume set to {level}%."
+    except Exception as e:
+        logger.debug(f"PowerShell volume failed: {e}")
+
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        volume.SetMasterVolumeLevelScalar(level / 100, None)
+        return f"Volume set to {level}%."
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"pycaw volume failed: {e}")
+
+    try:
+        val = int(level * 655.35)
+        subprocess.run(["nircmd", "setsysvolume", str(val)], timeout=5)
+        return f"Volume set to {level}%."
+    except Exception:
+        pass
+
+    return f"Could not set volume. Try: pip install pycaw comtypes"
+
+
+@tool
+def get_current_volume() -> str:
+    """Get the current system volume level as a percentage."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        level = round(volume.GetMasterVolumeLevelScalar() * 100)
+        muted = volume.GetMute()
+        return f"Volume is at {level}%{' (muted)' if muted else ''}."
+    except ImportError:
+        return "Install pycaw for volume reading: pip install pycaw comtypes"
+    except Exception as e:
+        return f"Could not read volume: {e}"
+
+
+@tool
+def increase_volume(amount: int = 10) -> str:
+    """
+    Increase the system volume by a given amount (default 10%).
+    Example: 'increase volume', 'volume up', 'louder'.
+    """
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        current = round(volume.GetMasterVolumeLevelScalar() * 100)
+        new_level = min(100, current + amount)
+        volume.SetMasterVolumeLevelScalar(new_level / 100, None)
+        return f"Volume increased from {current}% to {new_level}%."
+    except ImportError:
+        return "Install pycaw: pip install pycaw comtypes"
+    except Exception as e:
+        return f"Volume increase error: {e}"
+
+
+@tool
+def decrease_volume(amount: int = 10) -> str:
+    """
+    Decrease the system volume by a given amount (default 10%).
+    Example: 'decrease volume', 'volume down', 'quieter'.
+    """
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        current = round(volume.GetMasterVolumeLevelScalar() * 100)
+        new_level = max(0, current - amount)
+        volume.SetMasterVolumeLevelScalar(new_level / 100, None)
+        return f"Volume decreased from {current}% to {new_level}%."
+    except ImportError:
+        return "Install pycaw: pip install pycaw comtypes"
+    except Exception as e:
+        return f"Volume decrease error: {e}"
+
+
+@tool
+def mute_volume() -> str:
+    """Mute the system audio. Use for: 'mute', 'silence', 'turn off sound'."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        volume.SetMute(1, None)
+        return "Audio muted."
+    except ImportError:
+        return "Install pycaw: pip install pycaw comtypes"
+    except Exception as e:
+        return f"Mute error: {e}"
+
+
+@tool
+def unmute_volume() -> str:
+    """Unmute the system audio. Use for: 'unmute', 'turn sound back on'."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        volume.SetMute(0, None)
+        return "Audio unmuted."
+    except ImportError:
+        return "Install pycaw: pip install pycaw comtypes"
+    except Exception as e:
+        return f"Unmute error: {e}"
+
+
+# ── Brightness ────────────────────────────────────────────────
+
+def _set_brightness_wmi(level: int) -> bool:
+    """Set brightness using WMI (works on laptops with integrated display)."""
+    ps = f"""
+    $monitor = Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods
+    if ($monitor) {{ $monitor.WmiSetBrightness(1, {level}); Write-Output "OK" }}
+    else {{ Write-Output "NO_MONITOR" }}
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        return "OK" in out
+    except Exception:
+        return False
+
+
+def _get_brightness_wmi() -> int | None:
+    """Get current brightness via WMI."""
+    ps = """
+    $b = Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness
+    if ($b) { Write-Output $b.CurrentBrightness }
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=8
+        ).stdout.strip()
+        return int(out) if out.isdigit() else None
+    except Exception:
+        return None
+
+
+@tool
+def set_brightness(level: int) -> str:
+    """
+    Set screen brightness to a percentage (0-100).
+    Example: set_brightness(70) sets brightness to 70%.
+    Use for: 'set brightness to 80', 'brightness 50 percent'.
+    Only works on laptops with built-in display (not external monitors).
+    """
+    level = max(0, min(100, level))
+
+    # Method 1: WMI (most reliable on laptops)
+    if _set_brightness_wmi(level):
+        return f"Brightness set to {level}%."
+
+    # Method 2: screen_brightness_control library
+    try:
+        import screen_brightness_control as sbc
+        sbc.set_brightness(level)
+        return f"Brightness set to {level}%."
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"sbc brightness failed: {e}")
+
+    # Method 3: PowerShell via registry (fallback)
+    try:
+        ps = f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{level})"
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, timeout=8)
+        return f"Brightness set to {level}%."
+    except Exception as e:
+        pass
+
+    return (
+        f"Could not set brightness automatically. "
+        f"Try: pip install screen-brightness-control\n"
+        f"Or adjust manually: Windows key → brightness slider in Quick Settings."
+    )
+
+
+@tool
+def get_brightness() -> str:
+    """Get the current screen brightness level."""
+    level = _get_brightness_wmi()
+    if level is not None:
+        return f"Screen brightness is at {level}%."
+    try:
+        import screen_brightness_control as sbc
+        level = sbc.get_brightness()
+        if isinstance(level, list):
+            level = level[0]
+        return f"Screen brightness is at {level}%."
+    except ImportError:
+        return "Install screen-brightness-control: pip install screen-brightness-control"
+    except Exception as e:
+        return f"Could not read brightness: {e}"
+
+
+@tool
+def increase_brightness(amount: int = 10) -> str:
+    """
+    Increase screen brightness by a given amount (default 10%).
+    Use for: 'increase brightness', 'brighter', 'screen too dark'.
+    """
+    current = _get_brightness_wmi()
+    if current is None:
+        try:
+            import screen_brightness_control as sbc
+            b = sbc.get_brightness()
+            current = b[0] if isinstance(b, list) else b
+        except Exception:
+            current = 50  # assume 50 if can't read
+
+    new_level = min(100, current + amount)
+    return set_brightness.invoke({"level": new_level})
+
+
+@tool
+def decrease_brightness(amount: int = 10) -> str:
+    """
+    Decrease screen brightness by a given amount (default 10%).
+    Use for: 'decrease brightness', 'dimmer', 'screen too bright'.
+    """
+    current = _get_brightness_wmi()
+    if current is None:
+        try:
+            import screen_brightness_control as sbc
+            b = sbc.get_brightness()
+            current = b[0] if isinstance(b, list) else b
+        except Exception:
+            current = 50
+
+    new_level = max(0, current - amount)
+    return set_brightness.invoke({"level": new_level})
+
+
+import subprocess
+import asyncio
+
+
+def toggle_bluetooth(enable: bool) -> str:
+    """
+    Turn Bluetooth on or off using Windows Device Manager.
+    """
+    try:
+        action = "Enable" if enable else "Disable"
+
+        ps_script = f'''
+        $bluetoothDevices = Get-PnpDevice | Where-Object {{ $_.FriendlyName -like "*Bluetooth*" -or $_.Class -eq "Bluetooth" }}
+        $changed = $false
+
+        foreach ($device in $bluetoothDevices) {{
+            if ({str(enable).lower()} -and $device.Status -ne "OK") {{
+                Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
+                $changed = $true
+            }}
+            elseif (-not {str(enable).lower()} -and $device.Status -eq "OK") {{
+                Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
+                $changed = $true
+            }}
+        }}
+
+        if ($changed) {{
+            Write-Output "SUCCESS"
+        }} else {{
+            Write-Output "NO_CHANGE"
+        }}
+        '''
+
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if "SUCCESS" in result.stdout:
+            return f"Bluetooth turned {'ON' if enable else 'OFF'} successfully."
+        else:
+            return f"Bluetooth was already {'ON' if enable else 'OFF'}."
+
+    except subprocess.TimeoutExpired:
+        return "Bluetooth operation timed out. Try using Windows Settings manually."
+    except Exception as e:
+        return f"Error controlling Bluetooth: {e}"
+
+@tool
+def turn_on_bluetooth() -> str:
+    """Turn Bluetooth ON. Use for: 'turn on bluetooth', 'enable bluetooth'."""
+    return toggle_bluetooth(True)
+
+
+@tool
+def turn_off_bluetooth() -> str:
+    """Turn Bluetooth OFF. Use for: 'turn off bluetooth', 'disable bluetooth'."""
+    return toggle_bluetooth(False)
+
+@tool
+def toggle_airplane_mode(enable: bool) -> str:
+    """
+    Turn Airplane mode on or off.
+    enable=True to turn ON (disables all wireless), enable=False to turn OFF.
+    Use for: 'airplane mode on', 'turn off airplane mode'.
+    """
+    val = "1" if enable else "0"
+    ps = f"Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\RadioManagement\\SystemRadioState' -Name '(Default)' -Value {val} -Type DWord"
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            capture_output=True, timeout=8
+        )
+        # Also use the radio management API
+        ps2 = f"""
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        $async = [Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
+        """
+        state = "on" if enable else "off"
+        return f"Airplane mode turned {'ON' if enable else 'OFF'}. You may need to toggle manually in Quick Settings if this doesn't take effect."
+    except Exception as e:
+        return f"Airplane mode error: {e}"

@@ -1,32 +1,44 @@
 import time
-from typing import TypedDict, Annotated, Any, Optional
+from typing import TypedDict, Annotated, Optional
 
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
 
 from src.brain.memory import LongTermMemory
 from src.brain.rag import conversational_rag_chain
-from src.tools.system_tools import open_app, close_app, get_volume, open_website
-from src.tools.api_tools import get_weather, web_search, get_weather_current_location, get_city
-from src.tools.personal_tools import send_email, add_note, send_whatsapp_message, open_whatsapp_chat_for_call
+
+from src.tools.system_tools import (
+    open_app, close_app, get_volume, open_website,
+    toggle_wifi, scan_wifi_networks, connect_wifi,
+    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
+    forget_wifi_network, get_wifi_password,
+    set_volume, get_current_volume, increase_volume, decrease_volume,
+    mute_volume, unmute_volume,
+    set_brightness, get_brightness, increase_brightness, decrease_brightness,
+    toggle_bluetooth, turn_on_bluetooth, turn_off_bluetooth,
+)
+
+from src.tools.api_tools import (
+    get_weather, web_search,
+    get_weather_current_location, get_city,
+)
+
+from src.tools.personal_tools import (
+    send_email, add_note,
+    send_whatsapp_message, open_whatsapp_chat_for_call,
+)
+
 from src.tools.phone_tools import (
     call_contact, call_number, end_call, resolve_contact_number,
     get_phone_last_location, get_phone_live_location,
     open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
 )
 
-from src.tools.system_tools import (
-    toggle_wifi, scan_wifi_networks, connect_wifi,
-    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
-    forget_wifi_network, get_wifi_password,
-)
-
 from src.tools.location_tools import (
-    get_current_location, get_location_coordinates, get_maps_link
+    get_current_location, get_location_coordinates, get_maps_link,
 )
 
 from src.tools.admin_tools import (
@@ -34,13 +46,11 @@ from src.tools.admin_tools import (
     uninstall_application, install_application, list_installed_apps,
     list_running_processes, kill_process, run_command,
     get_network_info, list_open_ports, ping_host,
-    get_disk_usage, get_system_info, shutdown_pc, cancel_shutdown,
-    restart_pc, set_volume,
+    get_disk_usage, get_system_info, shutdown_pc, cancel_shutdown, restart_pc,
 )
-from src.utils.config import OPENROUTER_API_KEY,HUGGING_FACE_API_TOKEN
 from src.utils.logger import logger
 
-ADMIN_SESSION_TTL = 300
+ADMIN_SESSION_TTL = 300   # 5 minutes
 
 
 class AgentState(TypedDict):
@@ -69,7 +79,6 @@ def _recall_memory_impl(query: str, memory: LongTermMemory) -> str:
     return memory.recall(query)
 
 def _is_admin_session_valid(state: AgentState) -> bool:
-    """Return True if admin was granted and the TTL hasn't expired."""
     if not state.get("is_admin"):
         return False
     granted_at = state.get("admin_granted_at")
@@ -77,15 +86,27 @@ def _is_admin_session_valid(state: AgentState) -> bool:
         return False
     return (time.time() - granted_at) < ADMIN_SESSION_TTL
 
+def _handle_unlock_admin(state: AgentState) -> str:
+    try:
+        from src.utils.face_auth import verify_admin_face
+        verified = verify_admin_face()
+        return "ADMIN_VERIFIED" if verified else "Face not recognised. Admin access denied."
+    except ImportError:
+        return "face_auth module not found. Run: pip install deepface opencv-python tf-keras"
+    except Exception as e:
+        return f"Face verification error: {e}"
+
+
+# ── Placeholder tools (logic in TOOL_IMPL_MAP) ───────────────────────────────
 
 @tool
 def rag_search(query: str) -> str:
-    """Search your personal knowledge base (documents)."""
+    """Search your personal knowledge base (documents). Use when the user asks about stored documents."""
     return "Placeholder"
 
 @tool
 def remember_fact(fact: str) -> str:
-    """Store a fact about the user in long-term memory."""
+    """Store a personal fact about the user in long-term memory."""
     return "Placeholder"
 
 @tool
@@ -97,26 +118,34 @@ def recall_memory(query: str) -> str:
 def unlock_admin() -> str:
     """
     Verify the user's identity via face recognition to grant full admin access.
-    MUST be called before any admin-only tool (file deletion, uninstall, shutdown, etc.).
-    Only call this once per session — admin access lasts 5 minutes after verification.
+    Call before any admin-only tool (file ops, uninstall, shutdown, processes, etc).
+    Admin access lasts 5 minutes per session.
     """
     return "Placeholder"
 
 
 NORMAL_TOOLS = [
+    turn_on_bluetooth,turn_off_bluetooth,
     rag_search, remember_fact, recall_memory,
     open_app, close_app, get_volume, open_website,
-    get_weather, web_search,
-    send_email, add_note, send_whatsapp_message, open_whatsapp_chat_for_call,
+    set_volume, get_current_volume,
+    increase_volume, decrease_volume,
+    mute_volume, unmute_volume,
+    set_brightness, get_brightness,
+    increase_brightness, decrease_brightness,
+    #toggle_bluetooth,
+    toggle_wifi, scan_wifi_networks, connect_wifi,
+    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
+    forget_wifi_network, get_wifi_password,
+    get_weather, get_weather_current_location, get_city,
+    get_current_location, get_location_coordinates, get_maps_link,
+    web_search,
+    send_email, add_note,
+    send_whatsapp_message, open_whatsapp_chat_for_call,
     call_contact, call_number, end_call, resolve_contact_number,
     get_phone_last_location, get_phone_live_location,
     open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
     unlock_admin,
-    get_weather_current_location, get_city,
-    get_current_location, get_location_coordinates, get_maps_link,
-toggle_wifi, scan_wifi_networks, connect_wifi,
-    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
-    forget_wifi_network, get_wifi_password
 ]
 
 ADMIN_TOOLS = [
@@ -126,77 +155,80 @@ ADMIN_TOOLS = [
     uninstall_application, install_application, list_installed_apps,
     # processes
     list_running_processes, kill_process, run_command,
-    # network
+    # network diagnostics
     get_network_info, list_open_ports, ping_host,
-    # system
-    get_disk_usage, get_system_info, shutdown_pc, cancel_shutdown, restart_pc, set_volume,
+    # system power
+    get_disk_usage, get_system_info,
+    shutdown_pc, cancel_shutdown, restart_pc,
 ]
 
 ADMIN_TOOL_NAMES = {t.name for t in ADMIN_TOOLS}
-
-ALL_TOOLS = NORMAL_TOOLS + ADMIN_TOOLS
+ALL_TOOLS        = NORMAL_TOOLS + ADMIN_TOOLS
 
 TOOL_IMPL_MAP = {
-    "rag_search":     lambda args, state: _rag_search_impl(args["query"], state["session_id"]),
-    "remember_fact":  lambda args, state: _remember_fact_impl(args["fact"], state["long_term_memory"]),
-    "recall_memory":  lambda args, state: _recall_memory_impl(args["query"], state["long_term_memory"]),
-    "unlock_admin":   lambda args, state: _handle_unlock_admin(state),
+    "rag_search":    lambda args, state: _rag_search_impl(args["query"], state["session_id"]),
+    "remember_fact": lambda args, state: _remember_fact_impl(args["fact"], state["long_term_memory"]),
+    "recall_memory": lambda args, state: _recall_memory_impl(args["query"], state["long_term_memory"]),
+    "unlock_admin":  lambda args, state: _handle_unlock_admin(state),
 }
 
-def _handle_unlock_admin(state: AgentState) -> str:
-    """Run face verification and return a result string. State mutation happens in tool_executor."""
-    try:
-        from src.utils.face_auth import verify_admin_face
-        verified = verify_admin_face()
-        if verified:
-            return "ADMIN_VERIFIED"
-        return "Face not recognised. Admin access denied."
-    except ImportError:
-        return "face_auth module not found. Run: pip install deepface opencv-python tf-keras"
-    except Exception as e:
-        return f"Face verification error: {e}"
 
-
-endpoint = HuggingFaceEndpoint(
-    repo_id="Qwen/Qwen2.5-7B-Instruct",
-    huggingfacehub_api_token=HUGGING_FACE_API_TOKEN
-)
-
-llm = ChatHuggingFace(llm=endpoint)
-
+llm                   = ChatOllama(model="qwen2.5:1.5b")
 llm_with_normal_tools = llm.bind_tools(NORMAL_TOOLS)
 llm_with_all_tools    = llm.bind_tools(ALL_TOOLS)
 
 SYSTEM_PROMPT = SystemMessage(content=(
-    "You are JARVIS, a powerful personal voice assistant with full admin access to the user's laptop.\n\n"
+    "You are JARVIS, a powerful personal voice assistant with full control over "
+    "the user's laptop and Android phone.\n\n"
 
     "ADMIN ACCESS RULES:\n"
-    "- Admin-only tools (file operations, uninstall, shutdown, processes, network, etc.) require "
-    "the user's identity to be verified via face recognition first.\n"
-    "- If the user asks for an admin action and is_admin is False, call unlock_admin() ONCE. "
-    "Do NOT explain or warn — just call it immediately.\n"
-    "- If unlock_admin returns 'ADMIN_VERIFIED', proceed with the requested admin tool in the next turn.\n"
-    "- If unlock returns a denial message, tell the user access was denied and stop.\n"
-    "- Admin access automatically expires after 5 minutes. If it has expired and the user requests "
-    "an admin action, call unlock_admin() again.\n\n"
+    "- Admin-only tools (file ops, uninstall, shutdown, processes, network diagnostics) "
+    "require face verification first.\n"
+    "- If is_admin is False and an admin tool is needed, call unlock_admin() immediately "
+    "— do not warn or explain first.\n"
+    "- After ADMIN_VERIFIED, proceed with the requested admin tool.\n"
+    "- Admin session expires after 5 minutes — re-verify if expired.\n\n"
 
-    "MEMORY RULES:\n"
-    "- If the user states a personal fact, call remember_fact to store it.\n"
-    "- If the user asks something they may have told you before, call recall_memory first.\n\n"
+    "VOLUME & BRIGHTNESS:\n"
+    "- 'set volume to 70' → set_volume(70)\n"
+    "- 'volume up / louder' → increase_volume()\n"
+    "- 'volume down / quieter' → decrease_volume()\n"
+    "- 'mute' → mute_volume()  |  'unmute' → unmute_volume()\n"
+    "- 'set brightness to 80' → set_brightness(80)\n"
+    "- 'brighter' → increase_brightness()  |  'dimmer' → decrease_brightness()\n\n"
 
-    "GENERAL RULES:\n"
-    "- The moment a tool result gives you enough information to answer, stop calling tools and respond.\n"
-    "- Never call the same tool twice in a row with the same input.\n"
-    "- Keep answers concise — they will be spoken aloud.\n"
-    "- For destructive actions (delete, uninstall, shutdown), confirm the action with the user "
-    "BEFORE executing it, e.g. 'Are you sure you want to delete test.csv?'.\n"
+    "WIFI:\n"
+    "- 'turn on/off wifi' → toggle_wifi(True/False)\n"
+    "- 'scan wifi / show available networks' → scan_wifi_networks()\n"
+    "- 'connect to X' → connect_wifi(ssid='X')\n"
+    "- 'what wifi am I on' → get_wifi_status()\n\n"
+
+    "WEATHER & LOCATION:\n"
+    "- 'weather here / my location / current location' → get_weather_current_location()\n"
+    "- 'weather in Colombo' → get_weather(city='Colombo')\n"
+    "- 'where am I / my location / open maps' → get_current_location() then get_maps_link()\n\n"
+
+    "PHONE (ADB):\n"
+    "- 'call dad' → call_contact('dad')\n"
+    "- 'call 0771234567' → call_number('0771234567')\n"
+    "- 'text mom I'm coming' → compose_sms(number=..., message=...)\n\n"
+
+    "MEMORY:\n"
+    "- Personal facts stated by user → remember_fact()\n"
+    "- Questions about past info → recall_memory() first\n\n"
+
+    "GENERAL:\n"
+    "- Answer immediately once you have tool results — never loop.\n"
+    "- Never call the same tool twice with the same args.\n"
+    "- Keep answers short — they will be spoken aloud.\n"
+    "- Confirm before destructive actions (delete, uninstall, shutdown).\n"
+    "- NEVER return an empty response — always say something.\n"
 ))
 
 
 def agent_node(state: AgentState):
     messages = state["messages"]
     is_admin = _is_admin_session_valid(state)
-
     active_llm = llm_with_all_tools if is_admin else llm_with_normal_tools
 
     if messages and isinstance(messages[-1], ToolMessage):
@@ -214,25 +246,22 @@ def agent_node(state: AgentState):
 
 def tool_executor(state: AgentState):
     last_message = state["messages"][-1]
-    tool_calls = last_message.tool_calls
+    tool_calls   = last_message.tool_calls
     if not tool_calls:
         return {"messages": []}
 
-    results = []
+    tool_map      = {t.name: t for t in ALL_TOOLS}
+    results       = []
     state_updates = {}
-
-    tool_map = {t.name: t for t in ALL_TOOLS}
 
     for tc in tool_calls:
         tool_name = tc["name"]
-        args = tc["args"]
+        args      = tc["args"]
 
+        # Admin gate
         if tool_name in ADMIN_TOOL_NAMES and not _is_admin_session_valid(state):
             results.append(ToolMessage(
-                content=(
-                    "Admin access required but not verified. "
-                    "I will call unlock_admin to verify your identity first."
-                ),
+                content="Admin access required. Calling unlock_admin to verify identity.",
                 tool_call_id=tc["id"]
             ))
             continue
@@ -240,12 +269,14 @@ def tool_executor(state: AgentState):
         try:
             if tool_name in TOOL_IMPL_MAP:
                 result = TOOL_IMPL_MAP[tool_name](args, state)
-            else:
+            elif tool_name in tool_map:
                 result = tool_map[tool_name].invoke(args)
+            else:
+                result = f"Unknown tool: {tool_name}"
 
-            # Handle the admin unlock sentinel
+            # Handle admin unlock sentinel
             if tool_name == "unlock_admin" and result == "ADMIN_VERIFIED":
-                state_updates["is_admin"] = True
+                state_updates["is_admin"]         = True
                 state_updates["admin_granted_at"] = time.time()
                 result = "Identity verified. Admin access granted for 5 minutes."
                 logger.info("Admin session started.")
@@ -255,7 +286,9 @@ def tool_executor(state: AgentState):
 
         except Exception as e:
             logger.error(f"Tool '{tool_name}' error: {e!r}")
-            results.append(ToolMessage(content=f"Tool error: {str(e)}", tool_call_id=tc["id"]))
+            results.append(ToolMessage(
+                content=f"Tool error: {str(e)}", tool_call_id=tc["id"]
+            ))
 
     update = {"messages": results}
     update.update(state_updates)
@@ -273,5 +306,4 @@ workflow.add_conditional_edges(
 workflow.add_edge("tools", "agent")
 
 agent_graph = workflow.compile()
-
-logger.info("agent_graph loaded: admin-mode + face-unlock + TTL")
+logger.info("agent_graph loaded: all tools integrated")

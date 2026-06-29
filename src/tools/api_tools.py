@@ -94,7 +94,7 @@ def get_city(lat: float, lon: float) -> dict:
     response = requests.get(url, params=params, headers=headers)
 
     print("STATUS:", response.status_code)
-    print("RAW:", response.text[:300])  # DEBUG
+    print("RAW:", response.text[:300])
 
     if response.status_code != 200:
         return {"error": "API failed"}
