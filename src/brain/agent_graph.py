@@ -2,6 +2,7 @@ import time
 from typing import TypedDict, Annotated, Optional
 
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage, SystemMessage
@@ -9,6 +10,10 @@ from langchain_core.tools import tool
 
 from src.brain.memory import LongTermMemory
 from src.brain.rag import conversational_rag_chain
+
+from src.tools.news_search_tools import (
+    get_world_news, deep_search, search_person, get_news_by_topic
+)
 
 from src.tools.system_tools import (
     open_app, close_app, get_volume, open_website,
@@ -48,6 +53,7 @@ from src.tools.admin_tools import (
     get_network_info, list_open_ports, ping_host,
     get_disk_usage, get_system_info, shutdown_pc, cancel_shutdown, restart_pc,
 )
+from src.utils.config import OPENROUTER_API_KEY
 from src.utils.logger import logger
 
 ADMIN_SESSION_TTL = 300   # 5 minutes
@@ -97,8 +103,6 @@ def _handle_unlock_admin(state: AgentState) -> str:
         return f"Face verification error: {e}"
 
 
-# ── Placeholder tools (logic in TOOL_IMPL_MAP) ───────────────────────────────
-
 @tool
 def rag_search(query: str) -> str:
     """Search your personal knowledge base (documents). Use when the user asks about stored documents."""
@@ -146,6 +150,7 @@ NORMAL_TOOLS = [
     get_phone_last_location, get_phone_live_location,
     open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
     unlock_admin,
+    get_world_news, get_news_by_topic, deep_search, search_person,
 ]
 
 ADMIN_TOOLS = [
@@ -173,7 +178,12 @@ TOOL_IMPL_MAP = {
 }
 
 
-llm                   = ChatOllama(model="qwen2.5:1.5b")
+llm  = ChatOllama(model="qwen2.5:1.5b")
+#llm = ChatOpenAI(
+#   api_key=OPENROUTER_API_KEY,
+#   base_url="https://openrouter.ai/api/v1",
+#   model="openrouter/free"
+#)
 llm_with_normal_tools = llm.bind_tools(NORMAL_TOOLS)
 llm_with_all_tools    = llm.bind_tools(ALL_TOOLS)
 
@@ -189,6 +199,15 @@ SYSTEM_PROMPT = SystemMessage(content=(
     "- After ADMIN_VERIFIED, proceed with the requested admin tool.\n"
     "- Admin session expires after 5 minutes — re-verify if expired.\n\n"
 
+    "NEWS & RESEARCH:\n"
+    "- 'world news / today's news / what's happening' → get_world_news()\n"
+    "- 'news about technology/sports/etc' → get_news_by_topic(topic)\n"
+    "- 'who is X' / 'tell me about X' → search_person(name)\n"
+    "- If user says 'search hard', 'advanced search', 'dig deeper', 'research thoroughly' "
+    "→ deep_search(query) instead of web_search.\n"
+    "- deep_search and search_person take longer (10-20s) since they scrape full articles "
+    "— let the user know briefly if it's taking a moment.\n\n"
+    
     "VOLUME & BRIGHTNESS:\n"
     "- 'set volume to 70' → set_volume(70)\n"
     "- 'volume up / louder' → increase_volume()\n"
@@ -258,7 +277,6 @@ def tool_executor(state: AgentState):
         tool_name = tc["name"]
         args      = tc["args"]
 
-        # Admin gate
         if tool_name in ADMIN_TOOL_NAMES and not _is_admin_session_valid(state):
             results.append(ToolMessage(
                 content="Admin access required. Calling unlock_admin to verify identity.",
@@ -274,7 +292,6 @@ def tool_executor(state: AgentState):
             else:
                 result = f"Unknown tool: {tool_name}"
 
-            # Handle admin unlock sentinel
             if tool_name == "unlock_admin" and result == "ADMIN_VERIFIED":
                 state_updates["is_admin"]         = True
                 state_updates["admin_granted_at"] = time.time()
