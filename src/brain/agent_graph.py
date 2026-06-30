@@ -1,11 +1,16 @@
+import json
+import re
 import time
+import uuid
 from typing import TypedDict, Annotated, Optional
 
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage, SystemMessage
+from langchain_core.messages import (
+    BaseMessage, HumanMessage, ToolMessage, SystemMessage, AIMessage,
+)
 from langchain_core.tools import tool
 
 from src.brain.memory import LongTermMemory
@@ -103,6 +108,45 @@ def _handle_unlock_admin(state: AgentState) -> str:
         return f"Face verification error: {e}"
 
 
+def _extract_fallback_tool_call(content: str):
+    """
+    Some small/local models (e.g. qwen2.5 via Ollama) sometimes emit a tool
+    call as raw text instead of using the structured tool_calls field, e.g.:
+
+        {"name": "get_city", "arguments": {...}}
+        </tool_call>
+
+    or with a missing/garbled <tool_call> opening tag. This recovers that
+    intent so the tool actually executes instead of getting spoken back to
+    the user as raw JSON.
+    """
+    if not content or "{" not in content or "}" not in content:
+        return None
+
+    cleaned = (
+        content.replace("<tool_call>", "")
+               .replace("</tool_call>", "")
+               .strip()
+    )
+
+    try:
+        start = cleaned.index("{")
+        end = cleaned.rindex("}") + 1
+        data = json.loads(cleaned[start:end])
+    except Exception:
+        return None
+
+    name = data.get("name")
+    if not name:
+        return None
+
+    return {
+        "name": name,
+        "args": data.get("arguments", data.get("args", {})),
+        "id": f"fallback-{uuid.uuid4().hex[:8]}",
+    }
+
+
 @tool
 def rag_search(query: str) -> str:
     """Search your personal knowledge base (documents). Use when the user asks about stored documents."""
@@ -178,7 +222,7 @@ TOOL_IMPL_MAP = {
 }
 
 
-llm  = ChatOllama(model="qwen2.5:1.5b")
+llm  = ChatOllama(model="qwen2.5:1.5b",temperature=0)
 #llm = ChatOpenAI(
 #   api_key=OPENROUTER_API_KEY,
 #   base_url="https://openrouter.ai/api/v1",
@@ -207,7 +251,7 @@ SYSTEM_PROMPT = SystemMessage(content=(
     "→ deep_search(query) instead of web_search.\n"
     "- deep_search and search_person take longer (10-20s) since they scrape full articles "
     "— let the user know briefly if it's taking a moment.\n\n"
-    
+
     "VOLUME & BRIGHTNESS:\n"
     "- 'set volume to 70' → set_volume(70)\n"
     "- 'volume up / louder' → increase_volume()\n"
@@ -254,6 +298,15 @@ def agent_node(state: AgentState):
         response = llm.invoke([SYSTEM_PROMPT] + messages)
     else:
         response = active_llm.invoke([SYSTEM_PROMPT] + messages)
+
+    if not response.tool_calls:
+        fallback = _extract_fallback_tool_call(response.content)
+        if fallback:
+            logger.warning(
+                f"Model emitted tool call as raw text, recovered: "
+                f"{fallback['name']}({fallback['args']})"
+            )
+            response = AIMessage(content="", tool_calls=[fallback])
 
     if response.tool_calls:
         logger.info(f"Tool calls: {[tc['name'] for tc in response.tool_calls]}")
