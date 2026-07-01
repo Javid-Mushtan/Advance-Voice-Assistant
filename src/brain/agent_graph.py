@@ -15,6 +15,7 @@ from langchain_core.tools import tool
 
 from src.brain.memory import LongTermMemory
 from src.brain.rag import conversational_rag_chain
+from src.brain.tool_router import TOOL_GROUPS, get_tools_for_query
 
 from src.tools.news_search_tools import (
     get_world_news, deep_search, search_person, get_news_by_topic
@@ -71,7 +72,6 @@ class AgentState(TypedDict):
     is_admin: bool
     admin_granted_at: Optional[float]
 
-
 def _rag_search_impl(query: str, session_id: str) -> str:
     try:
         result = conversational_rag_chain.invoke(
@@ -108,45 +108,6 @@ def _handle_unlock_admin(state: AgentState) -> str:
         return f"Face verification error: {e}"
 
 
-def _extract_fallback_tool_call(content: str):
-    """
-    Some small/local models (e.g. qwen2.5 via Ollama) sometimes emit a tool
-    call as raw text instead of using the structured tool_calls field, e.g.:
-
-        {"name": "get_city", "arguments": {...}}
-        </tool_call>
-
-    or with a missing/garbled <tool_call> opening tag. This recovers that
-    intent so the tool actually executes instead of getting spoken back to
-    the user as raw JSON.
-    """
-    if not content or "{" not in content or "}" not in content:
-        return None
-
-    cleaned = (
-        content.replace("<tool_call>", "")
-               .replace("</tool_call>", "")
-               .strip()
-    )
-
-    try:
-        start = cleaned.index("{")
-        end = cleaned.rindex("}") + 1
-        data = json.loads(cleaned[start:end])
-    except Exception:
-        return None
-
-    name = data.get("name")
-    if not name:
-        return None
-
-    return {
-        "name": name,
-        "args": data.get("arguments", data.get("args", {})),
-        "id": f"fallback-{uuid.uuid4().hex[:8]}",
-    }
-
-
 @tool
 def rag_search(query: str) -> str:
     """Search your personal knowledge base (documents). Use when the user asks about stored documents."""
@@ -172,47 +133,13 @@ def unlock_admin() -> str:
     return "Placeholder"
 
 
-NORMAL_TOOLS = [
-    turn_on_bluetooth,turn_off_bluetooth,
-    rag_search, remember_fact, recall_memory,
-    open_app, close_app, get_volume, open_website,
-    set_volume, get_current_volume,
-    increase_volume, decrease_volume,
-    mute_volume, unmute_volume,
-    set_brightness, get_brightness,
-    increase_brightness, decrease_brightness,
-    #toggle_bluetooth,
-    toggle_wifi, scan_wifi_networks, connect_wifi,
-    disconnect_wifi, get_wifi_status, list_saved_wifi_networks,
-    forget_wifi_network, get_wifi_password,
-    get_weather, get_weather_current_location, get_city,
-    get_current_location, get_location_coordinates, get_maps_link,
-    web_search,
-    send_email, add_note,
-    send_whatsapp_message, open_whatsapp_chat_for_call,
-    call_contact, call_number, end_call, resolve_contact_number,
-    get_phone_last_location, get_phone_live_location,
-    open_app_on_phone, set_phone_wifi, compose_sms, check_phone_connection,
-    unlock_admin,
-    get_world_news, get_news_by_topic, deep_search, search_person,
-]
+ALWAYS_TOOLS = [rag_search, remember_fact, recall_memory, unlock_admin]
+ALL_TOOLS_MAP: dict[str, any] = {
+    t.name: t for group in TOOL_GROUPS.values() for t in group
+}
 
-ADMIN_TOOLS = [
-    # file system
-    scan_files, delete_file, move_file, read_file_contents, list_directory,
-    # software
-    uninstall_application, install_application, list_installed_apps,
-    # processes
-    list_running_processes, kill_process, run_command,
-    # network diagnostics
-    get_network_info, list_open_ports, ping_host,
-    # system power
-    get_disk_usage, get_system_info,
-    shutdown_pc, cancel_shutdown, restart_pc,
-]
-
-ADMIN_TOOL_NAMES = {t.name for t in ADMIN_TOOLS}
-ALL_TOOLS        = NORMAL_TOOLS + ADMIN_TOOLS
+for t in ALWAYS_TOOLS:
+    ALL_TOOLS_MAP[t.name] = t
 
 TOOL_IMPL_MAP = {
     "rag_search":    lambda args, state: _rag_search_impl(args["query"], state["session_id"]),
@@ -221,6 +148,11 @@ TOOL_IMPL_MAP = {
     "unlock_admin":  lambda args, state: _handle_unlock_admin(state),
 }
 
+ADMIN_TOOL_NAMES = {
+    t.name
+    for group_name in ("file_system", "software", "processes", "network_admin", "system_power")
+    for t in TOOL_GROUPS.get(group_name, [])
+}
 
 llm  = ChatOllama(model="qwen2.5:1.5b",temperature=0)
 #llm = ChatOpenAI(
@@ -228,90 +160,61 @@ llm  = ChatOllama(model="qwen2.5:1.5b",temperature=0)
 #   base_url="https://openrouter.ai/api/v1",
 #   model="openrouter/free"
 #)
-llm_with_normal_tools = llm.bind_tools(NORMAL_TOOLS)
-llm_with_all_tools    = llm.bind_tools(ALL_TOOLS)
 
 SYSTEM_PROMPT = SystemMessage(content=(
-    "You are JARVIS, a powerful personal voice assistant with full control over "
-    "the user's laptop and Android phone.\n\n"
+    "You are JARVIS, a personal voice assistant. You control the user's laptop and Android phone.\n\n"
 
-    "ADMIN ACCESS RULES:\n"
-    "- Admin-only tools (file ops, uninstall, shutdown, processes, network diagnostics) "
-    "require face verification first.\n"
-    "- If is_admin is False and an admin tool is needed, call unlock_admin() immediately "
-    "— do not warn or explain first.\n"
-    "- After ADMIN_VERIFIED, proceed with the requested admin tool.\n"
-    "- Admin session expires after 5 minutes — re-verify if expired.\n\n"
+    "RULES:\n"
+    "- Call the right tool immediately — do not explain before calling.\n"
+    "- After receiving a tool result, answer in plain spoken English and STOP.\n"
+    "- Never call the same tool twice with the same arguments.\n"
+    "- Never return an empty response.\n"
+    "- Keep answers short — they are read aloud by text-to-speech.\n"
+    "- Confirm before destructive actions (delete, uninstall, shutdown).\n\n"
 
-    "NEWS & RESEARCH:\n"
-    "- 'world news / today's news / what's happening' → get_world_news()\n"
-    "- 'news about technology/sports/etc' → get_news_by_topic(topic)\n"
-    "- 'who is X' / 'tell me about X' → search_person(name)\n"
-    "- If user says 'search hard', 'advanced search', 'dig deeper', 'research thoroughly' "
-    "→ deep_search(query) instead of web_search.\n"
-    "- deep_search and search_person take longer (10-20s) since they scrape full articles "
-    "— let the user know briefly if it's taking a moment.\n\n"
-
-    "VOLUME & BRIGHTNESS:\n"
-    "- 'set volume to 70' → set_volume(70)\n"
-    "- 'volume up / louder' → increase_volume()\n"
-    "- 'volume down / quieter' → decrease_volume()\n"
-    "- 'mute' → mute_volume()  |  'unmute' → unmute_volume()\n"
-    "- 'set brightness to 80' → set_brightness(80)\n"
-    "- 'brighter' → increase_brightness()  |  'dimmer' → decrease_brightness()\n\n"
-
-    "WIFI:\n"
-    "- 'turn on/off wifi' → toggle_wifi(True/False)\n"
-    "- 'scan wifi / show available networks' → scan_wifi_networks()\n"
-    "- 'connect to X' → connect_wifi(ssid='X')\n"
-    "- 'what wifi am I on' → get_wifi_status()\n\n"
-
-    "WEATHER & LOCATION:\n"
-    "- 'weather here / my location / current location' → get_weather_current_location()\n"
-    "- 'weather in Colombo' → get_weather(city='Colombo')\n"
-    "- 'where am I / my location / open maps' → get_current_location() then get_maps_link()\n\n"
-
-    "PHONE (ADB):\n"
-    "- 'call dad' → call_contact('dad')\n"
-    "- 'call 0771234567' → call_number('0771234567')\n"
-    "- 'text mom I'm coming' → compose_sms(number=..., message=...)\n\n"
+    "ADMIN:\n"
+    "- File ops, software install/uninstall, processes, shutdown → require face verification.\n"
+    "- If not verified, call unlock_admin() first without warning the user.\n\n"
 
     "MEMORY:\n"
-    "- Personal facts stated by user → remember_fact()\n"
-    "- Questions about past info → recall_memory() first\n\n"
+    "- User states a personal fact → call remember_fact().\n"
+    "- User asks about something they told you before → call recall_memory() first.\n\n"
 
-    "GENERAL:\n"
-    "- Answer immediately once you have tool results — never loop.\n"
-    "- Never call the same tool twice with the same args.\n"
-    "- Keep answers short — they will be spoken aloud.\n"
-    "- Confirm before destructive actions (delete, uninstall, shutdown).\n"
-    "- NEVER return an empty response — always say something.\n"
+    "QUICK REFERENCE:\n"
+    "- Volume up/down → increase_volume / decrease_volume\n"
+    "- Brighter/dimmer → increase_brightness / decrease_brightness\n"
+    "- WiFi on/off → toggle_wifi(True/False)\n"
+    "- Weather here → get_weather_current_location()\n"
+    "- World news → get_world_news()\n"
+    "- Who is X → search_person(name)\n"
+    "- Search hard → deep_search(query)\n"
+    "- Call dad → call_contact('dad')\n"
 ))
-
 
 def agent_node(state: AgentState):
     messages = state["messages"]
     is_admin = _is_admin_session_valid(state)
-    active_llm = llm_with_all_tools if is_admin else llm_with_normal_tools
+
+    last_human = next(
+        (m.content for m in reversed(messages) if isinstance(m, HumanMessage)),
+        ""
+    )
 
     if messages and isinstance(messages[-1], ToolMessage):
         response = llm.invoke([SYSTEM_PROMPT] + messages)
     else:
-        response = active_llm.invoke([SYSTEM_PROMPT] + messages)
-
-    if not response.tool_calls:
-        fallback = _extract_fallback_tool_call(response.content)
-        if fallback:
-            logger.warning(
-                f"Model emitted tool call as raw text, recovered: "
-                f"{fallback['name']}({fallback['args']})"
-            )
-            response = AIMessage(content="", tool_calls=[fallback])
+        selected_tools = get_tools_for_query(
+            user_text=last_human,
+            always_include=ALWAYS_TOOLS,
+            is_admin=is_admin,
+        )
+        llm_with_tools = llm.bind_tools(selected_tools)
+        response = llm_with_tools.invoke([SYSTEM_PROMPT] + messages)
 
     if response.tool_calls:
         logger.info(f"Tool calls: {[tc['name'] for tc in response.tool_calls]}")
     else:
-        logger.info(f"Direct answer: {response.content!r}")
+        logger.info(f"Direct answer: {response.content[:80]!r}")
 
     return {"messages": [response]}
 
@@ -322,7 +225,6 @@ def tool_executor(state: AgentState):
     if not tool_calls:
         return {"messages": []}
 
-    tool_map      = {t.name: t for t in ALL_TOOLS}
     results       = []
     state_updates = {}
 
@@ -340,13 +242,13 @@ def tool_executor(state: AgentState):
         try:
             if tool_name in TOOL_IMPL_MAP:
                 result = TOOL_IMPL_MAP[tool_name](args, state)
-            elif tool_name in tool_map:
-                result = tool_map[tool_name].invoke(args)
+            elif tool_name in ALL_TOOLS_MAP:
+                result = ALL_TOOLS_MAP[tool_name].invoke(args)
             else:
                 result = f"Unknown tool: {tool_name}"
 
             if tool_name == "unlock_admin" and result == "ADMIN_VERIFIED":
-                state_updates["is_admin"]         = True
+                state_updates["is_admin"] = True
                 state_updates["admin_granted_at"] = time.time()
                 result = "Identity verified. Admin access granted for 5 minutes."
                 logger.info("Admin session started.")
@@ -364,6 +266,7 @@ def tool_executor(state: AgentState):
     update.update(state_updates)
     return update
 
+
 workflow = StateGraph(AgentState)
 workflow.add_node("agent", agent_node)
 workflow.add_node("tools", tool_executor)
@@ -376,4 +279,4 @@ workflow.add_conditional_edges(
 workflow.add_edge("tools", "agent")
 
 agent_graph = workflow.compile()
-logger.info("agent_graph loaded: all tools integrated")
+logger.info("agent_graph loaded: dynamic tool routing active")
