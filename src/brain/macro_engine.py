@@ -111,7 +111,7 @@ BUILTIN_MACROS = {
         "description": "Take a break — lock screen, open Spotify, dim screen",
         "trigger_phrases": ["break time", "take a break", "i need a break"],
         "steps": [
-            {"tool": "open_app",      "args": {"app_name": "spotify"},  "delay": 0},
+            {"tool": "open_app",      "args": {"app_name": "pycharm"},  "delay": 0},
             {"tool": "set_volume",    "args": {"level": 60},            "delay": 1},
             {"tool": "set_brightness","args": {"level": 40},            "delay": 0},
         ]
