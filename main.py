@@ -1,15 +1,19 @@
 import random
+import time
 from datetime import datetime
 
 import ollama
 
+from src.brain.macro_engine import macro_scheduler
 from src.voice.input_handler import listen
 from src.voice.output_handler import speak
 from src.brain.agent_graph import agent_graph, AgentState
 from src.brain.memory import LongTermMemory
 from langchain_core.messages import HumanMessage
 
-def get_greeting(name="Master Javid"):
+macro_scheduler.start()
+
+def get_greeting(name="Javid 0.5"):
     hour = datetime.now().hour
 
     if 5 <= hour < 12:
@@ -53,7 +57,7 @@ def get_greeting(name="Master Javid"):
     opener = random.choice(personality_openers)
 
     response = ollama.chat(
-        model="qwen2.5:1.5b",
+        model="gpt-oss:20b",
         messages=[
             {
                 "role": "system",
@@ -61,7 +65,7 @@ def get_greeting(name="Master Javid"):
                 You are an advanced AI voice assistant.
             
                 Startup message:
-                "{greeting}, {name}. {opener} How can I help you?"
+                "{time.time()} {greeting}, {name}. {opener} How can I help you?"
             
                 Behavior rules:
                 - Name is important
@@ -72,7 +76,7 @@ def get_greeting(name="Master Javid"):
             },
             {
                 "role": "user",
-                "content": "Start the conversation."
+                "content": "Start the conversation with creativly."
             }
         ]
     )
@@ -81,7 +85,7 @@ def get_greeting(name="Master Javid"):
 
 
 def main():
-    print("Initializing Jarvis...")
+    print("Initializing Javid 0.5...")
     memory = LongTermMemory()
     session_id = "Javid 0.5"
     state = AgentState(
@@ -90,7 +94,7 @@ def main():
         long_term_memory=memory
     )
 
-    speak(get_greeting("Master Wayne"))
+    speak(get_greeting("JAVID 0.5"))
     while True:
         try:
             user_input = listen()

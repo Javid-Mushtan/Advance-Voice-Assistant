@@ -4,6 +4,10 @@ from typing import Any
 
 from src.utils.logger import logger
 
+from src.brain.macro_engine import (
+    run_macro, create_macro, list_macros,
+    delete_macro, schedule_macro, describe_macro,
+)
 from src.tools.system_tools import (
     open_app, close_app, get_volume, open_website,
     toggle_wifi, scan_wifi_networks, connect_wifi,
@@ -56,6 +60,11 @@ TOOL_GROUPS: dict[str, list] = {
     "brightness": [
         set_brightness, get_brightness,
         increase_brightness, decrease_brightness,
+    ],
+
+    "macros": [
+        run_macro, create_macro, list_macros,
+        delete_macro, schedule_macro, describe_macro,
     ],
 
     "wifi": [
@@ -151,6 +160,15 @@ INTENT_RULES: list[tuple[int, list[str], list[str]]] = [
           r"\bconnect to\b", r"\bnetwork password\b"], ["wifi"]),
 
     (10, [r"\bbluetooth\b", r"\bbt\b"], ["bluetooth"]),
+
+    (10, [
+        r"\bmacro\b", r"\broutine\b",
+        r"\bwork mode\b", r"\bmorning routine\b",
+        r"\bnight mode\b", r"\bbreak time\b",
+        r"\bpresentation mode\b", r"\bshutdown routine\b",
+        r"\bcreate.*routine\b", r"\bschedule.*macro\b",
+        r"\blist.*macro\b", r"\bwhat.*routine\b",
+    ], ["macros"]),
 
     (10, [r"\bairplane\b", r"\bflight mode\b"], ["system_settings"]),
 

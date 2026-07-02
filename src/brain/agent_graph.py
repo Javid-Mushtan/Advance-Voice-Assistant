@@ -59,6 +59,12 @@ from src.tools.admin_tools import (
     get_network_info, list_open_ports, ping_host,
     get_disk_usage, get_system_info, shutdown_pc, cancel_shutdown, restart_pc,
 )
+
+from src.brain.macro_engine import (
+    run_macro, create_macro, list_macros,
+    delete_macro, schedule_macro, describe_macro,
+)
+
 from src.utils.config import OPENROUTER_API_KEY
 from src.utils.logger import logger
 
@@ -133,7 +139,11 @@ def unlock_admin() -> str:
     return "Placeholder"
 
 
-ALWAYS_TOOLS = [rag_search, remember_fact, recall_memory, unlock_admin]
+ALWAYS_TOOLS = [
+    rag_search, remember_fact, recall_memory, unlock_admin,
+    run_macro, create_macro, list_macros,
+    delete_macro, schedule_macro, describe_macro,
+]
 ALL_TOOLS_MAP: dict[str, any] = {
     t.name: t for group in TOOL_GROUPS.values() for t in group
 }
@@ -154,7 +164,7 @@ ADMIN_TOOL_NAMES = {
     for t in TOOL_GROUPS.get(group_name, [])
 }
 
-llm  = ChatOllama(model="qwen2.5:1.5b",temperature=0)
+llm  = ChatOllama(model="gpt-oss:20b",temperature=0)
 #llm = ChatOpenAI(
 #   api_key=OPENROUTER_API_KEY,
 #   base_url="https://openrouter.ai/api/v1",
@@ -189,6 +199,14 @@ SYSTEM_PROMPT = SystemMessage(content=(
     "- Who is X → search_person(name)\n"
     "- Search hard → deep_search(query)\n"
     "- Call dad → call_contact('dad')\n"
+    
+    "MACROS:\n"
+    "- 'morning routine / work mode / night mode / break time' → run_macro(macro_name)\n"
+    "- 'create a macro called X that does Y' → create_macro(name, description, steps_json)\n"
+    "- 'list my macros / what routines do I have' → list_macros()\n"
+    "- 'what does work mode do' → describe_macro(macro_name)\n"
+    "- 'schedule morning routine at 8am daily' → schedule_macro(macro_name, time_str, repeat)\n"
+    "- 'delete gym mode macro' → delete_macro(name)\n\n"
 ))
 
 def agent_node(state: AgentState):
