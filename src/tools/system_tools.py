@@ -816,8 +816,6 @@ def unmute_volume() -> str:
         return f"Unmute error: {e}"
 
 
-# ── Brightness ────────────────────────────────────────────────
-
 def _set_brightness_wmi(level: int) -> bool:
     """Set brightness using WMI (works on laptops with integrated display)."""
     ps = f"""
@@ -861,11 +859,9 @@ def set_brightness(level: int) -> str:
     """
     level = max(0, min(100, level))
 
-    # Method 1: WMI (most reliable on laptops)
     if _set_brightness_wmi(level):
         return f"Brightness set to {level}%."
 
-    # Method 2: screen_brightness_control library
     try:
         import screen_brightness_control as sbc
         sbc.set_brightness(level)
@@ -875,7 +871,6 @@ def set_brightness(level: int) -> str:
     except Exception as e:
         logger.debug(f"sbc brightness failed: {e}")
 
-    # Method 3: PowerShell via registry (fallback)
     try:
         ps = f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{level})"
         subprocess.run(["powershell", "-NoProfile", "-Command", ps],
@@ -947,66 +942,238 @@ def decrease_brightness(amount: int = 10) -> str:
     return set_brightness.invoke({"level": new_level})
 
 
-import subprocess
-import asyncio
-
-
-def toggle_bluetooth(enable: bool) -> str:
-    """
-    Turn Bluetooth on or off using Windows Device Manager.
-    """
+def is_admin():
+    """Check if the script is running with administrative privileges."""
     try:
-        action = "Enable" if enable else "Disable"
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
 
-        ps_script = f'''
-        $bluetoothDevices = Get-PnpDevice | Where-Object {{ $_.FriendlyName -like "*Bluetooth*" -or $_.Class -eq "Bluetooth" }}
-        $changed = $false
 
-        foreach ($device in $bluetoothDevices) {{
-            if ({str(enable).lower()} -and $device.Status -ne "OK") {{
-                Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
-                $changed = $true
-            }}
-            elseif (-not {str(enable).lower()} -and $device.Status -eq "OK") {{
-                Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
-                $changed = $true
-            }}
-        }}
-
-        if ($changed) {{
-            Write-Output "SUCCESS"
-        }} else {{
-            Write-Output "NO_CHANGE"
-        }}
+def _get_bluetooth_device_info():
+    """Get comprehensive Bluetooth device information."""
+    try:
+        # Get all Bluetooth devices with their status
+        ps_script = '''
+        $devices = Get-PnpDevice -Class Bluetooth
+        $result = @()
+        foreach ($device in $devices) {
+            $result += [PSCustomObject]@{
+                FriendlyName = $device.FriendlyName
+                InstanceId = $device.InstanceId
+                Status = $device.Status
+                Problem = $device.Problem
+            }
+        }
+        $result | ConvertTo-Json
         '''
 
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            ["powershell", "-Command", ps_script],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            import json
+            devices = json.loads(result.stdout)
+            if isinstance(devices, dict):
+                devices = [devices]
+            return devices
+        return []
+    except Exception as e:
+        print(f"Error getting Bluetooth info: {e}")
+        return []
+
+
+def _get_bluetooth_instance_ids():
+    """
+    Get ALL Bluetooth adapter InstanceIds, regardless of vendor
+    (Intel, Realtek, Qualcomm, MediaTek, Broadcom, etc).
+    Returns a list - most laptops only have one, but some expose
+    the radio as more than one PnP entry.
+    """
+    try:
+        ps = '''
+        Get-PnpDevice -Class Bluetooth |
+        Select-Object -ExpandProperty InstanceId
+        '''
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=10
+        )
+        ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if not ids:
+            logger.debug(f"No Bluetooth PnP devices found. stderr: {result.stderr.strip()}")
+        return ids
+    except Exception as e:
+        logger.error(f"Bluetooth InstanceId error: {e}")
+        return []
+
+
+def _get_bluetooth_status():
+    """Get current Bluetooth status."""
+    devices = _get_bluetooth_device_info()
+    if devices:
+        # Check if any Bluetooth device is enabled
+        for device in devices:
+            if device.get('Status') == 'OK':
+                return 'OK'
+        # Check if any device is disabled
+        for device in devices:
+            if device.get('Status') == 'Disabled':
+                return 'Disabled'
+        # Return status of first device
+        return devices[0].get('Status', 'Unknown')
+    return 'Unknown'
+
+
+def _run_powershell_as_admin(command):
+    """Run a PowerShell command with administrative privileges."""
+    try:
+        # Create a VBS script to run PowerShell as admin
+        vbs_script = f'''
+        Set UAC = CreateObject("Shell.Application")
+        UAC.ShellExecute "powershell.exe", "-Command {command}", "", "runas", 1
+        '''
+
+        with open('temp_admin.vbs', 'w') as f:
+            f.write(vbs_script)
+
+        result = subprocess.run(
+            ["cscript", "//nologo", "temp_admin.vbs"],
             capture_output=True,
             text=True,
             timeout=10
         )
 
-        if "SUCCESS" in result.stdout:
-            return f"Bluetooth turned {'ON' if enable else 'OFF'} successfully."
-        else:
-            return f"Bluetooth was already {'ON' if enable else 'OFF'}."
+        # Clean up
+        try:
+            import os
+            os.remove('temp_admin.vbs')
+        except:
+            pass
 
-    except subprocess.TimeoutExpired:
-        return "Bluetooth operation timed out. Try using Windows Settings manually."
+        return result
     except Exception as e:
-        return f"Error controlling Bluetooth: {e}"
+        print(f"Error running as admin: {e}")
+        return None
+
 
 @tool
 def turn_on_bluetooth() -> str:
-    """Turn Bluetooth ON. Use for: 'turn on bluetooth', 'enable bluetooth'."""
-    return toggle_bluetooth(True)
+    """Turn on Bluetooth."""
+    try:
+        if not is_admin():
+            return (
+                "Bluetooth control needs administrator rights on Windows "
+                "(Enable-PnpDevice can't run elevated on the fly reliably). "
+                "Please close JARVIS and relaunch it as Administrator, then try again."
+            )
+
+        instance_ids = _get_bluetooth_instance_ids()
+        if not instance_ids:
+            return "No Bluetooth adapter was detected on this system (Get-PnpDevice -Class Bluetooth returned nothing)."
+
+        errors = []
+        for instance_id in instance_ids:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"Enable-PnpDevice -InstanceId '{instance_id}' -Confirm:$false"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                errors.append(result.stderr.strip() or result.stdout.strip())
+
+        time.sleep(1.5)
+        status = _get_bluetooth_status()
+
+        if status not in ('Disabled', 'Unknown'):
+            return "Bluetooth turned on successfully."
+
+        detail = f" Details: {'; '.join(errors)}" if errors else ""
+        return f"Failed to turn on Bluetooth. Status: {status}.{detail}"
+
+    except Exception as e:
+        return f"Failed to turn on Bluetooth: {str(e)}"
 
 
 @tool
 def turn_off_bluetooth() -> str:
-    """Turn Bluetooth OFF. Use for: 'turn off bluetooth', 'disable bluetooth'."""
-    return toggle_bluetooth(False)
+    """Turn off Bluetooth."""
+    try:
+        if not is_admin():
+            return (
+                "Bluetooth control needs administrator rights on Windows "
+                "(Disable-PnpDevice can't run elevated on the fly reliably). "
+                "Please close JARVIS and relaunch it as Administrator, then try again."
+            )
+
+        instance_ids = _get_bluetooth_instance_ids()
+        if not instance_ids:
+            return "No Bluetooth adapter was detected on this system (Get-PnpDevice -Class Bluetooth returned nothing)."
+
+        errors = []
+        for instance_id in instance_ids:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"Disable-PnpDevice -InstanceId '{instance_id}' -Confirm:$false"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                errors.append(result.stderr.strip() or result.stdout.strip())
+
+        time.sleep(1.5)
+        status = _get_bluetooth_status()
+
+        if status == 'Disabled':
+            return "Bluetooth turned off successfully."
+
+        detail = f" Details: {'; '.join(errors)}" if errors else ""
+        return f"Failed to turn off Bluetooth. Status: {status}.{detail}"
+
+    except Exception as e:
+        return f"Failed to turn off Bluetooth: {str(e)}"
+
+
+@tool
+def toggle_bluetooth() -> str:
+    """Toggle Bluetooth on/off."""
+    try:
+        status = _get_bluetooth_status()
+
+        if status == 'Unknown':
+            return "Unable to determine Bluetooth status. Please check if Bluetooth is available on your system."
+
+        if status == 'Disabled' or status == 'Error':
+            return turn_on_bluetooth()
+        else:
+            return turn_off_bluetooth()
+
+    except Exception as e:
+        return f"Failed to toggle Bluetooth: {str(e)}"
+
+
+@tool
+def get_bluetooth_status() -> str:
+    """Get current Bluetooth status."""
+    try:
+        status = _get_bluetooth_status()
+        devices = _get_bluetooth_device_info()
+
+        if not devices:
+            return "No Bluetooth devices found on this system."
+
+        status_msg = f"Bluetooth is {status}"
+        if devices:
+            device_names = [d.get('FriendlyName', 'Unknown') for d in devices if d.get('FriendlyName')]
+            if device_names:
+                status_msg += f"\nDetected devices: {', '.join(device_names)}"
+
+        return status_msg
+    except Exception as e:
+        return f"Failed to get Bluetooth status: {str(e)}"
+
 
 @tool
 def toggle_airplane_mode(enable: bool) -> str:

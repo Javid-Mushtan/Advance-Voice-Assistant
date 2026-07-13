@@ -65,7 +65,7 @@ def get_greeting(name="Javid 0.5"):
                 You are an advanced AI voice assistant.
             
                 Startup message:
-                "{time.time()} {greeting}, {name}. {opener} How can I help you?"
+                "It's {datetime.now().strftime("%I:%M %p")} {greeting}, {name}. {opener} How can I help you?"
             
                 Behavior rules:
                 - Name is important
